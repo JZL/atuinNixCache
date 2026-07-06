@@ -2,6 +2,8 @@
 
 Claude generated:
 
+NEED to set cache priority in cachix to 30 not 41, so this cache supersedes
+
 Nightly [Cachix](https://cachix.org) binary-cache builder for a **patched atuin**, and the
 **single source of truth** for that patched build.
 

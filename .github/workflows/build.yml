@@ -55,6 +55,11 @@ jobs:
       - name: Build patched atuin
         run: nix build .#atuin --print-build-logs
 
+      - name: Pin latest build (protect the current atuin from Cachix GC)
+        # Reuses the same "atuin" pin name each run, so only the newest build is protected;
+        # older builds become unpinned and age out once GC is enabled in the cache settings.
+        run: cachix pin jzl-atuin atuin ./result
+
       - name: Commit updated flake.lock
         if: github.event_name != 'push'
         run: |

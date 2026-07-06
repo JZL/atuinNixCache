@@ -34,9 +34,11 @@ inputs actually change on `nixos-unstable`, which is exactly when a fresh build 
 
 ## Consuming from NixOS
 
-The host (`01_nixos`) already does two things:
+Consuming needs **two independent pieces** on the host (`01_nixos`) — the flake input is
+only the recipe; the substituter is what turns it into a download instead of a compile:
 
-1. Uses this flake's package instead of an inline override, in `configuration.nix`:
+1. **The recipe** — use this flake's package instead of an inline override, in
+   `configuration.nix`:
    ```nix
    inputs.atuinCache.packages.${pkgs.system}.atuin
    ```
@@ -45,17 +47,31 @@ The host (`01_nixos`) already does two things:
    inputs.atuinCache.url = "github:JZL/atuinNixCache";
    ```
    Because the host installs *this flake's* output (built against its own pinned nixpkgs),
-   the store path is identical to what CI pushed — a **guaranteed** hit, independent of the
-   rest of the system's nixpkgs.
+   the store path is identical to what CI pushed — a **guaranteed** hit. On its own, though,
+   this would just compile atuin locally.
 
-2. Adds the substituter so `nixos-rebuild` fetches instead of compiling:
+2. **The substituter** — where to download that store path from, in `configuration.nix`
+   under the existing `nix.settings`:
    ```nix
-   nix.settings = {
-     substituters = [ "https://jzl-atuin.cachix.org" ];
-     trusted-public-keys = [ "jzl-atuin.cachix.org-1:<public-key-from-cachix-UI>" ];
-   };
+   extra-substituters = [ "https://jzl-atuin.cachix.org" ];
+   extra-trusted-public-keys = [ "jzl-atuin.cachix.org-1:<public-key-from-cachix-UI>" ];
    ```
-   The public key is on the cache page at https://app.cachix.org/cache/jzl-atuin.
+   Use the `extra-` variants so `cache.nixos.org` stays in the list. Replace the key with
+   the real one from https://app.cachix.org/cache/jzl-atuin. **Note the GitHub repo
+   `atuinNixCache` is source code, not the cache — the cache is the separate
+   `jzl-atuin.cachix.org` URL.**
+
+## Staying under the 5 GB free-tier limit
+
+Only atuin's own output is pushed (its deps are substituted from `cache.nixos.org` and not
+re-uploaded), and only when atuin actually changes — so growth is ~tens of MB per change.
+To keep it bounded long-term:
+
+- Enable GC in the cache settings: **app.cachix.org → `jzl-atuin` → Settings → Garbage
+  Collection**, retention e.g. 30 days. Stale old atuins age out; the current one stays
+  warm because CI and `nixos-rebuild` fetch it.
+- The workflow also `cachix pin`s each new build under the name `atuin`, so the latest is
+  always protected from GC even if it hasn't been fetched recently.
 
 ## Changing the patch
 

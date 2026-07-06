@@ -1,0 +1,30 @@
+diff --git a/crates/atuin-client/src/history.rs b/crates/atuin-client/src/history.rs
+index d9d5a203..e9c447e5 100644
+--- a/crates/atuin-client/src/history.rs
++++ b/crates/atuin-client/src/history.rs
+@@ -374,7 +374,7 @@ impl History {
+     }
+ 
+     pub fn should_save(&self, settings: &Settings) -> bool {
+-        !(self.command.starts_with(' ')
++        !(false
+             || self.command.is_empty()
+             || settings.history_filter.is_match(&self.command)
+             || settings.cwd_filter.is_match(&self.cwd)
+@@ -407,7 +407,7 @@ mod tests {
+             .build()
+             .into();
+ 
+-        let with_space: History = History::capture()
++        let _with_space: History = History::capture()
+             .timestamp(time::OffsetDateTime::now_utc())
+             .command(" echo bar")
+             .cwd("/")
+@@ -443,7 +443,6 @@ mod tests {
+             .into();
+ 
+         assert!(normal_command.should_save(&settings));
+-        assert!(!with_space.should_save(&settings));
+         assert!(!empty.should_save(&settings));
+         assert!(!stripe_key.should_save(&settings));
+         assert!(!secret_dir.should_save(&settings));

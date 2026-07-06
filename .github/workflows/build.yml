@@ -1,0 +1,69 @@
+name: Build atuin binary cache
+
+on:
+  # Every night at 04:30 UTC. Rebuilds against the current tip of nixos-25.11 and
+  # pushes the resulting store paths to Cachix so `nixos-rebuild` gets a cache hit.
+  schedule:
+    - cron: "30 4 * * *"
+  # Rebuild when the flake or patch changes.
+  push:
+    branches: [main]
+    paths:
+      - flake.nix
+      - flake.lock
+      - patches/**
+      - .github/workflows/build.yml
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+concurrency:
+  group: build-atuin-cache
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed so the nightly flake.lock bump can be committed back.
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Set up Cachix
+        uses: cachix/cachix-action@v16
+        with:
+          name: jzl-atuin
+          # Create this secret in the repo: Settings -> Secrets and variables -> Actions.
+          # Generate the token with: cachix authtoken (or from the Cachix web UI).
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+
+      - name: Update flake lock to latest nixos-unstable
+        # On scheduled/manual runs, follow the branch tip so the cache tracks what a
+        # fresh `nixos-rebuild` will build. On push runs we build the committed lock as-is.
+        # This does NOT force a rebuild: an unchanged atuin closure is substituted from the
+        # Cachix cache above rather than recompiled.
+        if: github.event_name != 'push'
+        run: nix flake update
+
+      - name: Build patched atuin
+        run: nix build .#atuin --print-build-logs
+
+      - name: Commit updated flake.lock
+        if: github.event_name != 'push'
+        run: |
+          if git diff --quiet -- flake.lock; then
+            echo "flake.lock unchanged, nothing to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add flake.lock
+            git commit -m "chore: bump flake.lock (nightly atuin cache build)"
+            git push
+          fi

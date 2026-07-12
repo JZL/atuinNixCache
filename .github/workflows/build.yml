@@ -1,8 +1,8 @@
 name: Build atuin binary cache
-
 on:
-  # Every night at 04:30 UTC. Rebuilds against the current tip of nixos-25.11 and
-  # pushes the resulting store paths to Cachix so `nixos-rebuild` gets a cache hit.
+  # Every night at 04:30 UTC. Rebuilds against the current tip of the flake's
+  # nixpkgs input and pushes the resulting store paths to Cachix so
+  # `nixos-rebuild` gets a cache hit.
   schedule:
     - cron: "30 4 * * *"
   # Rebuild when the flake or patch changes.
@@ -43,23 +43,26 @@ jobs:
           # Create this secret in the repo: Settings -> Secrets and variables -> Actions.
           # Generate the token with: cachix authtoken (or from the Cachix web UI).
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-
-      - name: Update flake lock to latest nixos-unstable
-        # On scheduled/manual runs, follow the branch tip so the cache tracks what a
+      - name: Update flake lock to latest nixpkgs
+        # On scheduled/manual runs, follow the input tip so the cache tracks what a
         # fresh `nixos-rebuild` will build. On push runs we build the committed lock as-is.
         # This does NOT force a rebuild: an unchanged atuin closure is substituted from the
         # Cachix cache above rather than recompiled.
         if: github.event_name != 'push'
         run: nix flake update
-
       - name: Build patched atuin
         run: nix build .#atuin --print-build-logs
-
-      - name: Pin latest build (protect the current atuin from Cachix GC)
-        # Reuses the same "atuin" pin name each run, so only the newest build is protected;
-        # older builds become unpinned and age out once GC is enabled in the cache settings.
-        run: cachix pin jzl-atuin atuin ./result
-
+      - name: Push and pin latest build (protect current atuin from Cachix GC)
+        # `cachix push` blocks until the upload finishes, so the path is guaranteed to be
+        # in the cache before we pin. The cachix-action daemon pushes asynchronously and
+        # its post-build hook does NOT fire for substituted (cache-hit) paths, so relying
+        # on it alone would race the pin or skip an unchanged closure entirely.
+        #
+        # --keep-revisions 1 keeps only the newest revision of the "atuin" pin, so each
+        # night replaces the previous one and older closures are free to age out of GC.
+        run: |
+          cachix push jzl-atuin ./result
+          cachix pin jzl-atuin atuin ./result --keep-revisions 1
       - name: Commit updated flake.lock
         if: github.event_name != 'push'
         run: |

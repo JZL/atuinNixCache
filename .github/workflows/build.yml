@@ -43,21 +43,13 @@ jobs:
           # Create this secret in the repo: Settings -> Secrets and variables -> Actions.
           # Generate the token with: cachix authtoken (or from the Cachix web UI).
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-      - name: Update flake lock (nixpkgs + atuin main)
-        # On scheduled/manual runs, follow both input tips — nixos-unstable and the head of
-        # atuin's main branch — so the cache tracks what a fresh `nixos-rebuild` will build.
-        # On push runs we build the committed lock as-is.
+      - name: Update flake lock to latest nixpkgs
+        # On scheduled/manual runs, follow the input tip so the cache tracks what a
+        # fresh `nixos-rebuild` will build. On push runs we build the committed lock as-is.
         # This does NOT force a rebuild: an unchanged atuin closure is substituted from the
-        # Cachix cache above rather than recompiled. Since we build from main rather than a
-        # nixpkgs release, a real recompile happens whenever upstream main moves — that is
-        # the point, and it costs CI minutes, not host time.
-        #
-        # Named inputs, not a bare `nix flake update`: bumping atuin-upstream re-locks its
-        # transitive inputs (fenix, flake-parts) to whatever atuin itself pins, which is the
-        # combination upstream tests. A bare update would instead drag those to their own
-        # tips — extra moving parts nobody is watching.
+        # Cachix cache above rather than recompiled.
         if: github.event_name != 'push'
-        run: nix flake update nixpkgs atuin-upstream
+        run: nix flake update
       - name: Build patched atuin
         run: nix build .#atuin --print-build-logs
       - name: Push and pin latest build (protect current atuin from Cachix GC)
@@ -72,10 +64,7 @@ jobs:
           cachix push jzl-atuin ./result
           cachix pin jzl-atuin atuin ./result --keep-revisions 1
       - name: Commit updated flake.lock
-        # Runs on push events too: `nix build` writes the lock itself when an input is
-        # missing (e.g. right after atuin-upstream was added to flake.nix), and that resolution
-        # should be committed rather than silently redone on every run. Pushes made with
-        # GITHUB_TOKEN don't re-trigger workflows, so this can't loop.
+        if: github.event_name != 'push'
         run: |
           if git diff --quiet -- flake.lock; then
             echo "flake.lock unchanged, nothing to commit."
@@ -83,6 +72,6 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add flake.lock
-            git commit -m "chore: bump flake.lock (nightly atuin main + nixpkgs cache build)"
+            git commit -m "chore: bump flake.lock (nightly atuin cache build)"
             git push
           fi

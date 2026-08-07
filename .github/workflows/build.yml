@@ -1,4 +1,4 @@
-name: Build atuin binary cache
+name: Build binary cache (atuin, terraform)
 on:
   # Every night at 04:30 UTC. Rebuilds against the current tip of the flake's
   # nixpkgs input and pushes the resulting store paths to Cachix so
@@ -46,23 +46,32 @@ jobs:
       - name: Update flake lock to latest nixpkgs
         # On scheduled/manual runs, follow the input tip so the cache tracks what a
         # fresh `nixos-rebuild` will build. On push runs we build the committed lock as-is.
-        # This does NOT force a rebuild: an unchanged atuin closure is substituted from the
+        # This does NOT force a rebuild: an unchanged closure is substituted from the
         # Cachix cache above rather than recompiled.
         if: github.event_name != 'push'
         run: nix flake update
       - name: Build patched atuin
-        run: nix build .#atuin --print-build-logs
-      - name: Push and pin latest build (protect current atuin from Cachix GC)
-        # `cachix push` blocks until the upload finishes, so the path is guaranteed to be
+        # Explicit --out-link so the two builds don't fight over ./result.
+        run: nix build .#atuin --out-link result-atuin --print-build-logs
+      - name: Build terraform
+        # terraform is unfree, so cache.nixos.org has nothing and this is a full Go build
+        # the first time (~10 min). Every night after, it is substituted from jzl-atuin
+        # below unless nixos-unstable actually moved terraform -- which is the whole point.
+        run: nix build .#terraform --out-link result-terraform --print-build-logs
+      - name: Push and pin latest builds (protect current outputs from Cachix GC)
+        # `cachix push` blocks until the upload finishes, so the paths are guaranteed to be
         # in the cache before we pin. The cachix-action daemon pushes asynchronously and
         # its post-build hook does NOT fire for substituted (cache-hit) paths, so relying
         # on it alone would race the pin or skip an unchanged closure entirely.
         #
-        # --keep-revisions 1 keeps only the newest revision of the "atuin" pin, so each
-        # night replaces the previous one and older closures are free to age out of GC.
+        # --keep-revisions 1 keeps only the newest revision of each pin, so each night
+        # replaces the previous one and older closures are free to age out of GC. The two
+        # pin names are independent, so atuin and terraform are retained separately.
         run: |
-          cachix push jzl-atuin ./result
-          cachix pin jzl-atuin atuin ./result --keep-revisions 1
+          cachix push jzl-atuin ./result-atuin
+          cachix pin jzl-atuin atuin ./result-atuin --keep-revisions 1
+          cachix push jzl-atuin ./result-terraform
+          cachix pin jzl-atuin terraform ./result-terraform --keep-revisions 1
       - name: Commit updated flake.lock
         if: github.event_name != 'push'
         run: |

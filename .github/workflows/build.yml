@@ -21,10 +21,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  prepare-lock:
     runs-on: ubuntu-latest
     permissions:
-      # Needed so the nightly flake.lock bump can be committed back.
       contents: write
     steps:
       - name: Checkout
@@ -36,42 +35,17 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      - name: Set up Cachix
-        uses: cachix/cachix-action@v16
-        with:
-          name: jzl-atuin
-          # Create this secret in the repo: Settings -> Secrets and variables -> Actions.
-          # Generate the token with: cachix authtoken (or from the Cachix web UI).
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - name: Update flake lock to latest nixpkgs
-        # On scheduled/manual runs, follow the input tip so the cache tracks what a
-        # fresh `nixos-rebuild` will build. On push runs we build the committed lock as-is.
-        # This does NOT force a rebuild: an unchanged closure is substituted from the
-        # Cachix cache above rather than recompiled.
         if: github.event_name != 'push'
         run: nix flake update
-      - name: Build patched atuin
-        # Explicit --out-link so the two builds don't fight over ./result.
-        run: nix build .#atuin --out-link result-atuin --print-build-logs
-      - name: Build terraform
-        # terraform is unfree, so cache.nixos.org has nothing and this is a full Go build
-        # the first time (~10 min). Every night after, it is substituted from jzl-atuin
-        # below unless nixos-unstable actually moved terraform -- which is the whole point.
-        run: nix build .#terraform --out-link result-terraform --print-build-logs
-      - name: Push and pin latest builds (protect current outputs from Cachix GC)
-        # `cachix push` blocks until the upload finishes, so the paths are guaranteed to be
-        # in the cache before we pin. The cachix-action daemon pushes asynchronously and
-        # its post-build hook does NOT fire for substituted (cache-hit) paths, so relying
-        # on it alone would race the pin or skip an unchanged closure entirely.
-        #
-        # --keep-revisions 1 keeps only the newest revision of each pin, so each night
-        # replaces the previous one and older closures are free to age out of GC. The two
-        # pin names are independent, so atuin and terraform are retained separately.
-        run: |
-          cachix push jzl-atuin ./result-atuin
-          cachix pin jzl-atuin atuin ./result-atuin --keep-revisions 1
-          cachix push jzl-atuin ./result-terraform
-          cachix pin jzl-atuin terraform ./result-terraform --keep-revisions 1
+
+      - name: Share the exact lock with both architecture jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-lock
+          path: flake.lock
+          if-no-files-found: error
+
       - name: Commit updated flake.lock
         if: github.event_name != 'push'
         run: |
@@ -84,3 +58,54 @@ jobs:
             git commit -m "chore: bump flake.lock (nightly atuin cache build)"
             git push
           fi
+
+  build:
+    needs: prepare-lock
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use the lock prepared once for this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: flake-lock
+          path: .
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Set up Cachix
+        uses: cachix/cachix-action@v16
+        with:
+          name: jzl-atuin
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+
+      - name: Confirm native architecture
+        run: test "$(nix eval --raw --impure --expr builtins.currentSystem)" = "${{ matrix.system }}"
+
+      - name: Build patched atuin
+        run: nix build ".#packages.${{ matrix.system }}.atuin" --out-link result-atuin --print-build-logs
+
+      - name: Build terraform
+        run: nix build ".#packages.${{ matrix.system }}.terraform" --out-link result-terraform --print-build-logs
+
+      - name: Push and pin latest builds for this architecture
+        run: |
+          cachix push jzl-atuin ./result-atuin
+          cachix pin jzl-atuin "atuin-${{ matrix.system }}" ./result-atuin --keep-revisions 1
+          cachix push jzl-atuin ./result-terraform
+          cachix pin jzl-atuin "terraform-${{ matrix.system }}" ./result-terraform --keep-revisions 1

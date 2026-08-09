@@ -9,8 +9,8 @@
   outputs =
     { self, nixpkgs }:
     let
-      # The NixOS host (ovh-vps) is x86_64-linux; add more here if other machines consume the cache.
-      systems = [ "x86_64-linux" ];
+      # The NixOS hosts consume both supported Linux architectures.
+      systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       # terraform is unfree (BUSL-1.1 since 1.6), and `nixpkgs.legacyPackages` carries the
